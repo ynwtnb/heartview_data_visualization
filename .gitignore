@@ -9,6 +9,7 @@ wheels/
 # venv
 .venv
 src/
-pyproject.toml
 requirements-dev.lock
 requirements.lock
+
+data/format_acc.ipynb
