@@ -64,7 +64,8 @@ class Filters:
         filtered = np.convolve(signal, kernel, mode = 'same')
         return filtered
 
-    def filter_signal(self, signal, lowcut = 0.5, highcut = 10, order = 4, window_len = 0.5):
+    def filter_signal(self, signal, lowcut = 0.5, highcut = 10, order = 4,
+                      window_len = 0.5):
         """
         Filter out baseline drift, motion artifact, and powerline
         interference from PPG data and smooth out the signal for further
@@ -202,6 +203,7 @@ class BeatDetectors:
                     peaksx[peakedges[i] + y_values.index(max(y_values))])
             except:
                 pass
+        ppg_beats = np.asarray(ppg_beats).astype(int)
         return ppg_beats
 
     def erma(self, signal, W1 = 0.111, W2 = 0.667, offset = 0.02,
