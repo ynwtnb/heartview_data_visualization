@@ -341,7 +341,7 @@ def __update_plot_mims_artifacts(data: pd.DataFrame, mims: pd.DataFrame, artifac
     start_time = data[time_colname].iloc[start_idx]
     end_time = data[time_colname].iloc[end_idx]
 
-    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(18, 4))
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(15, 4))
     axes = axes.flatten()
     data_seg = data.iloc[start_idx:end_idx]
     if end_idx < len(data):
@@ -362,7 +362,7 @@ def __update_plot_mims_artifacts(data: pd.DataFrame, mims: pd.DataFrame, artifac
     axes[1].plot(mims_seg['HEADER_TIME_STAMP'], mims_seg['MIMS_UNIT'], color = 'deepskyblue', label = 'MIMS score')
     axes[1].set_xlabel('Timestamp')
     axes[1].set_ylabel('MIMS score')
-    axes[1].set_title('MIMS score (aceleration) - Segment {start_seg}')
+    axes[1].set_title(f'MIMS score (aceleration) - Segment {start_seg}')
 
     motion_intervals = detect_invalid_segments_mims(signal_start_time=start_time, signal_end_time=end_time, mims=mims_seg, threshold=mims_threshold)
     if motion_intervals:
@@ -370,6 +370,7 @@ def __update_plot_mims_artifacts(data: pd.DataFrame, mims: pd.DataFrame, artifac
             axes[0].axvspan(motion_interval[0], motion_interval[1], color='gold', alpha=0.3, zorder=0, label='Motion interval')
             axes[1].axvspan(motion_interval[0], motion_interval[1], color='gold', alpha=0.3, zorder=0, label='Motion interval')
 
+    plt.tight_layout()
     plt.show()
 
 def plot_mims_correction_interactive(data: pd.DataFrame, mims: pd.DataFrame, fs: int, colname: str, mims_threshold: float, time_colname = 'Timestamp', peak_colname = 'Peak', peak_colname_correction = 'Peak after correction', seg_sec = 30) -> None:
