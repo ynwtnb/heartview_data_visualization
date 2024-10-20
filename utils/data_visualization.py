@@ -259,7 +259,7 @@ def plot_mims_artifacts_interactive(data: pd.DataFrame, mims: pd.DataFrame, arti
         'data': fixed(data_copy),
         'mims': fixed(mims),
         'colname': fixed(colname),
-        'mmims_threshold': fixed(mims_threshold),
+        'mims_threshold': fixed(mims_threshold),
         'time_colname': fixed(time_colname),
         'peak_colname': fixed(peak_colname)
     }
