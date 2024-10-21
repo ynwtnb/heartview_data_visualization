@@ -516,7 +516,7 @@ class Cardio:
         return artifacts_ix
 
     def correct_interval(self, beats_ix, seg_size = 60, initial_hr = 'auto', prev_n = 6, min_bpm = 40, max_bpm = 200, 
-                            hr_estimate_window = 6, print_estimated_hr = True, short_threshold = (24 / 32),  long_threshold = (44 / 32), extra_threshold = (52 / 32), adaptive_threshold = False, ibi_data = None, window_num = 6, mims = None, mims_threshold = 0.2, ignore_motion_seg = False, motion_per_threshold = 0.2):
+                            hr_estimate_window = 6, print_estimated_hr = True, short_threshold = (24 / 32),  long_threshold = (44 / 32), extra_threshold = (52 / 32)):
         '''
         Correct artifactual beats in cardiovascular data based
         on the approach by Hegarty-Craver et al. (2018).
@@ -544,23 +544,6 @@ class Cardio:
             The threshold for long IBIs; by default, 44/32.
         extra_threshold : float, optional
             The threshold for extra long IBIs; by default, 52/32.
-        adaptive_threshold : bool, optional
-            Whether to use adaptive thresholds for IBI correction; by default, False.
-        ibi_data : pandas.DataFrame, optional
-            A DataFrame containing timestamps and IBIs in milliseconds; by default, None.
-            This DataFrame should contain 'Timestamp' and 'IBI' columns.
-        window_num : int, optional
-            The window size (number of previous clean IBIs) used for calculating the adaptive thresholds; by default, 6.
-        mims : pandas.DataFrame, optional
-            If adaptive_threshold is True, use this mims DataFrame to detect motion artifacts.
-            This DataFrame should contain 'Timestamp' and 'MIMS_UNIT' columns.
-        mims_threshold : float, optional
-            If adaptive_threshold is True, the threshold for detecting motion artifacts; by default, 0.2.
-        ignore_motion_seg : bool, optional
-            Whether to ignore segments with large motion artifacts; by default, False.
-        motion_per_threshold : float, optional
-            If ignore_motion_seg is True, the threshold for considering a segment as unusable; by default, 0.2.
-            0.2 means that if 20% of the segment is detected as motion artifact, the segment is considered uncorrectable.
 
         Returns
         -------
@@ -578,7 +561,7 @@ class Cardio:
         global MIN_BPM, MAX_BPM
         MIN_BPM = min_bpm
         MAX_BPM = max_bpm
-        MAX_COUNT = 10              # maximum number of consecutive corrections
+        #MAX_COUNT = 10              # maximum number of consecutive corrections
         
         ibis = np.diff(beats_ix)
         beats = beats_ix[1:]        # drop the first beat
@@ -623,7 +606,7 @@ class Cardio:
                     The item is added twice if it is not None.
                 '''
                 self.prev_n = prev_n
-                if item != None:
+                if item is not None:
                     self.queue = [item, item]
                 else:
                     self.queue = []
@@ -673,7 +656,7 @@ class Cardio:
                     The item to add to the FIFO; by default, None.
                     The item is added twice if it is not None.
                 '''
-                if item == None:
+                if item is None:
                     self.queue = []
                 else:
                     self.queue = [item, item]
@@ -691,263 +674,6 @@ class Cardio:
         
         prev_ibis_fifo = MaxNFifo(prev_n, first_ibi)        # FIFO for the previous n+1 IBIs
         correction_failed = MaxNFifo(prev_n - 1)            # Store whether the correction failed for the last n IBIs
-
-        def detect_invalid_segments_mims(mims_data = mims, threshold=mims_threshold):
-            '''
-            A function to detect intervals with large motion artifacts based on the MIMS data.
-
-            Parameters
-            ---------------------
-            mims_data : pandas.DataFrame
-                A data frame containing the MIMS data with 'Timestamp' and 'MIMS_UNIT' columns.
-            threshold : float
-                The threshold for detecting motion artifacts; by default, 0.2.
-            
-            Returns
-            ---------------------
-            motion_intervals : list
-                A list of tuples containing the start and end times of the motion intervals.
-            '''
-            # Detect intervals with large motion
-            motion_intervals = []
-            in_motion = False
-            start_time = None
-            
-            for i in range(len(mims_data)):
-                if mims_data['MIMS_UNIT'].iloc[i] > threshold:
-                    if not in_motion:
-                        in_motion = True
-                        start_time = mims_data['Timestamp'][i]
-                else:
-                    if in_motion:
-                        in_motion = False
-                        end_time = mims_data['Timestamp'][i]
-                        motion_intervals.append((start_time, end_time))
-            
-            # If the motion continues until the end of the data
-            if in_motion:
-                end_time = mims_data['Timestamp'][len(mims_data) - 1]
-                motion_intervals.append((start_time, end_time))
-            
-            return motion_intervals if motion_intervals else None
-
-        def segment_signal(data, seg_size = seg_size):
-            data_segmented = data.copy()
-            signal_start_time = data['Timestamp'].iloc[0]
-            signal_end_time = data['Timestamp'].iloc[-1]
-            n_seg = int(np.ceil((signal_end_time - signal_start_time).total_seconds() / seg_size))
-            segments = []
-            for i in range(n_seg):
-                seg_start = signal_start_time + pd.Timedelta(seconds = i * seg_size)
-                seg_end = signal_start_time + pd.Timedelta(seconds = (i + 1) * seg_size)
-                if seg_end > signal_end_time:
-                    seg_end = signal_end_time
-                segments.append((seg_start, seg_end))
-                if i == n_seg - 1:
-                    data_segmented.loc[(data_segmented['Timestamp'] >= seg_start) & (data_segmented['Timestamp'] <= seg_end), 'Segment'] = i + 1
-                else:
-                    data_segmented.loc[(data_segmented['Timestamp'] >= seg_start) & (data_segmented['Timestamp'] < seg_end), 'Segment'] = i + 1
-            segments_df = pd.DataFrame({
-                'Segment': np.arange(1, n_seg + 1),
-                'Start': [seg[0] for seg in segments],
-                'End': [seg[1] for seg in segments]
-            })
-            return data_segmented, segments_df
-
-        def identify_uncorrectable_segments(data, motion_intervals, motion_per_threshold):
-            '''
-            A function to identify uncorrectable segments.
-
-            Parameters
-            ---------------------
-            data : pandas.DataFrame
-                A data frame containing the IBIs with 'Timestamp' and 'IBI' columns.
-            motion_intervals : list
-                A list of tuples containing the start and end times of the motion intervals.
-            motion_per_threshold : float
-                The threshold for considering a segment as uncorrectable.
-            
-            Returns
-            ---------------------
-            data_segmented : pandas.DataFrame
-                A data frame containing the segmented IBIs with 'Segment' column.
-            segments_df : pandas.DataFrame
-                A data frame containing the segment numbers, start and end times, and motion percentages.
-            '''
-            data_segmented, segments_df = segment_signal(data = data, seg_size = seg_size)
-            seg_no = segments_df['Segment'].values
-
-            motion_interval_idx = 0
-            # For each segment
-            for seg in seg_no:
-                # Get the start and end times of the segment
-                seg_start = segments_df.loc[segments_df['Segment'] == seg, 'Start'].values[0]
-                seg_end = segments_df.loc[segments_df['Segment'] == seg, 'End'].values[0]
-                # Initialize the sum of motion time in the segment
-                sum_motion_time = 0
-                # For each motion interval
-                if motion_intervals is not None:
-                    while motion_interval_idx < len(motion_intervals):
-                        # Get the start and end times of the motion interval
-                        motion_start = motion_intervals[motion_interval_idx][0]
-                        motion_end = motion_intervals[motion_interval_idx][1]
-                        # If the motion interval overlaps with the segment, add the period to the sum
-                        # If the motion interval starts before the segment and ends within or after the segment
-                        if (motion_start <= seg_start) and (seg_start <= motion_end):
-                            sum_motion_time += (min(motion_end, seg_end) - seg_start).total_seconds()
-                            if seg_end < motion_end:
-                                break
-                        # If the motion interval starts within the segment and ends within or after the segment
-                        elif (seg_start <= motion_start) and (motion_start <= seg_end):
-                            sum_motion_time += (min(motion_end, seg_end) - motion_start).total_seconds()
-                            if seg_end < motion_end:
-                                break
-                        # If the motion interval starts after the segment, go to the next segment
-                        elif (seg_end < motion_start):
-                            break
-                        
-                        # If the motion interval ends in this segment, go to the next motion interval
-                        if motion_end < seg_end:
-                            motion_interval_idx += 1
-            
-                motion_percentage = round(sum_motion_time / seg_size, 4)
-                segments_df.loc[segments_df['Segment'] == seg, 'Motion Percentage (%)'] = motion_percentage * 100
-                if motion_percentage >= motion_per_threshold:
-                    segments_df.loc[segments_df['Segment'] == seg, 'Correctable'] = False
-                else:
-                    segments_df.loc[segments_df['Segment'] == seg, 'Correctable'] = True
-                
-            return data_segmented, segments_df
-
-        def is_invalid(row, motion_intervals):
-            '''
-            A function to check if the IBI is invalid based on the motion intervals and the valid IBI range.
-            This function is called by the identify_invalid_IBIs function.
-
-            Parameters
-            ---------------------
-            row : pandas.Series
-                A row of the DataFrame containing the IBIs.
-            motion_intervals : list
-                A list of tuples containing the start and end times of the motion intervals.
-            
-            Returns
-            ---------------------
-            bool
-                True if the IBI is invalid, False otherwise.
-            '''
-            # Check if bpm is in the 40 <= BPM <= 200 range
-            if row['IBI'] < 300 or row['IBI'] > 1500:
-                return True
-            # Check if there is no motion intervals detected
-            if motion_intervals is None:
-                return False
-            else:
-                # Check if the IBI is within the motion intervals
-                for start, end in motion_intervals:
-                    if row['Timestamp'] >= start and row['Timestamp'] <= end:
-                        return True
-                return False
-
-        def identify_invalid_IBIs(df_ibi, motion_intervals):
-            '''
-            A function to classify each IBI as invalid or valid based on the motion intervals and the valid IBI range.
-
-            Parameters
-            ---------------------
-            df_ibi : pandas.DataFrame
-                A data frame containing the IBIs.
-            motion_intervals : list
-                A list of tuples containing the start and end times of the motion intervals.
-            
-            Returns
-            ---------------------
-            df : pandas.DataFrame
-                A data frame containing the Timestamp, IBIs, and a boolian column 'invalid' indicating whether the IBI is invalid.
-            '''
-            df = df_ibi.copy()
-            if not df.empty:
-                df['invalid'] = df.apply(is_invalid, motion_intervals = motion_intervals, axis = 1)
-            else:
-                df['invalid'] = np.nan
-            return df
-
-        def calculate_thresholds(ibis, motion_intervals, window_num):
-            '''
-            A function to calculate the adaptive thresholds for short, long, and extra long IBIs.
-
-            Parameters
-            ---------------------
-            ibis : pandas.DataFrame
-                A DataFrame containing the IBIs.
-                This DataFrame should contain 'Timestamp' and 'IBI' columns.
-            motion_intervals : list
-                A list of tuples containing the start and end times of the motion intervals.
-            window_num : int
-                The window size (number of previous clean IBIs) used for calculating the adaptive thresholds.
-            '''
-            # Mark the IBIs as invalid if they are outside the valid range or within the motion intervals
-            ibi_marked_invalid = identify_invalid_IBIs(ibis, motion_intervals)
-            # Remove the invalid IBIs
-            clean_ibi = ibi_marked_invalid[ibi_marked_invalid['invalid'] == False].copy()
-            
-            # Calculate the estimated IBI for each IBI
-            clean_ibi['Estimated IBI'] = clean_ibi['IBI'].rolling(window=7, min_periods=1, closed='left').median()
-            
-            # Calculate the ratio of the estimated IBI to the actual IBI
-            clean_ibi['Estimated IBI / IBI'] = clean_ibi['Estimated IBI'] / clean_ibi['IBI']
-            
-            # Calculate the mean and standard deviation of the estimated IBI / IBI
-            clean_ibi['Mean'] = clean_ibi['Estimated IBI / IBI'].rolling(window=window_num, min_periods=1, closed='both') \
-                .apply(lambda x: x.mean() if not x.empty else np.nan)
-            # Approximate the standard deviation using the interquartile range
-            clean_ibi['Std'] = clean_ibi['Estimated IBI / IBI'].rolling(window=window_num, min_periods=1, closed='both') \
-                .apply(lambda x: (x.quantile(0.75) - x.quantile(0.25)) / 2 * 1.48 if not x.empty else np.nan)
-            
-            # Calculate the short, long, and extra long thresholds
-            # If the mean and standard deviation are not available, use the default threshold values
-            clean_ibi['Short threshold'] = (clean_ibi['Mean'] - 2 * clean_ibi['Std']).fillna(0.75)
-            clean_ibi['Long threshold'] = (clean_ibi['Mean'] + 2 * clean_ibi['Std']).fillna(1.375)
-            clean_ibi['Extra threshold'] = (clean_ibi['Mean'] + 4 * clean_ibi['Std']).fillna(1.625)
-            
-            return clean_ibi
-        
-        def adjust_threshold(row):
-            if row['Short threshold'] < 0.5:
-                row['Short threshold'] = 0.5
-            if row['Long threshold'] > 1.5:
-                row['Long threshold'] = 1.5
-            if row['Extra threshold'] > 2.5:
-                row['Extra threshold'] = 2.5
-            return row
-
-        def convert_ibi_idx_to_time(start_time, ibis):
-            '''
-            A function to convert the IBI indices to time-based DataFrame.
-            This function is used when adaptive_threshold = True.
-
-            Parameters
-            ---------------------
-            start_time : datetime
-                The start time of the data.
-            ibis : array_like
-                An array containing index-based IBI.
-            
-            Returns
-            ---------------------
-            ibi_df : pandas.DataFrame
-                A data frame containing the Timestamp and IBI columns.
-            '''
-            timestamps = []
-            timestamp = start_time
-            for i in ibis:
-                timestamps.append(timestamp)
-                timestamp += pd.Timedelta(milliseconds = i)
-            ibi_df = pd.DataFrame({
-                'Timestamp': timestamps,
-                'IBI': [i / self.fs * 1000 for i in ibis]
-            })
-            return ibi_df
 
         def estimate_ibi(prev_ibis):
             '''
@@ -1070,7 +796,7 @@ class Cardio:
             
             # Decrement the counter
             cnt = max(0, cnt-1)
-            if DEBUGGING == True:
+            if DEBUGGING:
                 print('accepted:', current_ibi, ' flag:', current_flag, ' based on ', prev_ibis_fifo.get_queue()[1:])
             # If the correction failed for the current IBI, push 1 to the correction_failed FIFO, otherwise push 0
             if correction_failed_flag == 0:
@@ -1095,7 +821,7 @@ class Cardio:
             corrected_ibi = prev_ibi + current_ibi
 
             # Check if the corrected IBI is acceptable
-            if acceptance_check(corrected_ibi, prev_ibis_fifo.get_queue()[1:]) == True:
+            if acceptance_check(corrected_ibi, prev_ibis_fifo.get_queue()[1:]):
                 # Update the current IBI to the corrected IBI
                 current_ibi = corrected_ibi
                 current_beat = current_beat
@@ -1136,10 +862,10 @@ class Cardio:
                 # Increment the counter
                 cnt += 1
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('added:', current_ibi, ' flag:', current_flag, ' based on ', prev_ibis_fifo.get_queue()[1:])
             else:
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('acceptance check failed for adding: ', corrected_ibi)
                 # If the corrected IBI is not acceptable, accept the current IBI
                 accept_ibi(n, correction_failed_flag=1)
@@ -1162,7 +888,7 @@ class Cardio:
 
             # Check if the corrected IBI is acceptable
             # Use IBIs before the second previous IBI
-            if acceptance_check(corrected_ibi, prev_ibis_fifo.get_queue()[:-2]) == True:
+            if acceptance_check(corrected_ibi, prev_ibis_fifo.get_queue()[:-2]):
                 # Update the current IBI to the corrected IBI
                 
                 # Pull up the second previous IBI as previous IBI
@@ -1193,10 +919,10 @@ class Cardio:
                 # Increment the counter
                 cnt += 1
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('added second prev + prev:', prev_ibi, ' flag:', prev_flag, ' based on ', prev_ibis_fifo.get_queue()[:-2])
             else:
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('acceptance check failed for adding second prev + prev: ', corrected_ibi)
                 # If the corrected IBI is not acceptable, accept the current IBI
                 accept_ibi(n, correction_failed_flag=1)
@@ -1225,7 +951,7 @@ class Cardio:
             ibi = floor((prev_ibi + current_ibi) / n_split)
 
             # Check if the corrected IBI is acceptable
-            if acceptance_check(ibi, prev_ibis_fifo.get_queue()[1:]) == True:
+            if acceptance_check(ibi, prev_ibis_fifo.get_queue()[1:]):
                 # Fix inserted IBIs other than previous/current IBIs
                 for i in range(n_split - 2):
                     corrected_ibis.append(ibi)
@@ -1272,10 +998,10 @@ class Cardio:
                 ## DELETE THIS LATER
                 n_insert += n_split - 2
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('inserted ',n_split - 2, ' intervals: ', ibi, ' flag:', current_flag, ' based on ', prev_ibis_fifo.get_queue()[1:])
             else:
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('acceptance check failed for inserting: ', ibi)
                 # If the corrected IBI is not acceptable, accept the current IBI
                 accept_ibi(n, correction_failed_flag=1)
@@ -1298,7 +1024,7 @@ class Cardio:
             ibi = floor((prev_ibi + current_ibi) / 2)
             
             # Check if the corrected IBI is acceptable
-            if acceptance_check(ibi, prev_ibis_fifo.get_queue()[1:]) == True:
+            if acceptance_check(ibi, prev_ibis_fifo.get_queue()[1:]):
                 # Update the previous and current IBI
                 prev_ibi = ibi
                 if n == 1:
@@ -1332,10 +1058,10 @@ class Cardio:
                 # Increment the counter
                 cnt += 1
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('averaged:', ibi, ' flag:', current_flag, ' based on ', prev_ibis_fifo.get_queue()[1:])
             else:
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('acceptance check failed for averaging: ', ibi)
                 accept_ibi(n, correction_failed_flag=1)
                 
@@ -1373,7 +1099,7 @@ class Cardio:
                 # Increment the counter
                 cnt += 1
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('Shorter than the minimum IBI and corrected: ', prev_ibi, ' ', prev_flag, ' | ', current_ibi, ' ', current_flag)
 
             # If the previous IBI is longer than the maximum IBI, shorten the previous IBI and lengthen the current IBI
@@ -1392,73 +1118,14 @@ class Cardio:
                 # Increment the counter
                 cnt += 1
 
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('Longer than the maximum IBI and corrected: ', prev_ibi, ' ', prev_flag, ' | ', current_ibi, ' ', current_flag)
             return
 
-        short_thresholds = []
-        long_thresholds = []
-        extra_thresholds = []
-        uncorrectable = []
-        if adaptive_threshold or ignore_motion_seg:
-            # Detect intervals with large motion artifacts
-            motion_intervals = detect_invalid_segments_mims(mims_data = mims, threshold = mims_threshold)
-        if ignore_motion_seg:
-            ibi_data_segmented, segments_df = identify_uncorrectable_segments(data = ibi_data, motion_intervals = motion_intervals, motion_per_threshold = motion_per_threshold)
         for n in range(len(ibis)):
             current_ibi = ibis[n]
             current_beat = beats[n]
-            if ignore_motion_seg:
-                # Get the current segment
-                seg = ibi_data_segmented['Segment'].iloc[n]
-                # If the current segment is uncorrectable, accept the current IBI
-                if segments_df.loc[segments_df['Segment'] == seg, 'Correctable'].values[0] == False:
-                    # If the current segment is uncorrectable, use the default thresholds to flag IBIs
-                    short_threshold = 0.75
-                    long_threshold = 1.375
-                    extra_threshold = 1.625
-                    # Append the IBI as it is
-                    corrected_ibis.append(ibis[n])
-                    corrected_beats.append(beats[n])
-                    corrected_flags.append(return_flag(current_ibi, prev_ibis = prev_ibis_fifo.get_queue()))
-                    uncorrectable.append(True)
-                    # Update the previous IBI to the current IBI
-                    prev_ibi = current_ibi
-                    prev_beat = current_beat
-                    prev_flag = return_flag(current_ibi, prev_ibis = prev_ibis_fifo.get_queue())
-                    continue
-                else:
-                    uncorrectable.append(False)
             # If the adaptive threshold is enabled, calculate the thresholds
-            if adaptive_threshold and ibi_data is not None:
-                # Get the timestamp of the first IBI
-                start_time = ibi_data['Timestamp'].iloc[0]
-                # Convert the corrected IBI indices to time-based DataFrame
-                # This dataframe only contains the corrected previous IBIs
-                ibi_df = convert_ibi_idx_to_time(start_time, corrected_ibis)
-                # Calculate the adaptive thresholds based on the corrected IBIs
-                thresholds = calculate_thresholds(ibi_df, motion_intervals, window_num)
-
-                if adaptive_threshold:
-                    beat_idx = beats[n]
-                    # If the threshold is empty, use the default values
-                    if thresholds.empty:
-                        short_threshold = 0.75
-                        long_threshold = 1.375
-                        extra_threshold = 1.625
-                    else:
-                        # If not empty, adjust thresholds outside of the valid range
-                        adjusted_thresholds = thresholds.apply(adjust_threshold, axis=1)
-                        # Get the calculated thresholds for the current beat
-                        short_threshold = adjusted_thresholds['Short threshold'].iloc[-1]
-                        long_threshold = adjusted_thresholds['Long threshold'].iloc[-1]
-                        extra_threshold = adjusted_thresholds['Extra threshold'].iloc[-1]
-                    short_thresholds.append(short_threshold)
-                    long_thresholds.append(long_threshold)
-                    extra_thresholds.append(extra_threshold)
-            
-            elif adaptive_threshold and ibi_data is None:
-                raise ValueError('The data parameter must be provided to calculate the adaptive thresholds.')
                 
             # Accept the first ibi
             if n == 0:
@@ -1478,7 +1145,7 @@ class Cardio:
             else:
                 current_flag = return_flag(current_ibi, prev_ibis = prev_ibis_fifo.get_queue()[:-1])
                 # If the current ibi is correct
-                if DEBUGGING == True:
+                if DEBUGGING:
                     print('n:', n)
                     print('prev:', prev_ibi, ' ', prev_flag, ' | current:', current_ibi, ' ', current_flag)
                 if current_flag == 'Correct':
@@ -1532,80 +1199,32 @@ class Cardio:
         original_ibis_ms = np.round((np.array(ibis) / self.fs) * 1000, 2)
         
         # Add the first beat and create a dataframe
-        if ibi_data is not None:
-            timestamp = ibi_data['Timestamp'].iloc[0]
-            timestamps = []
-            for ibi in original_ibis_ms:
-                timestamps.append(timestamp)
-                timestamp += pd.Timedelta(milliseconds = ibi)
-            timestamps.append(timestamp)
-            original = pd.DataFrame(
-                {'Timestamp': timestamps,
-                'Original IBI (ms)': np.insert(original_ibis_ms, 0, np.nan),
-                'Original IBI (index)': np.insert(ibis.astype(object), 0, np.nan),
-                'Original Beat': np.insert(beats, 0, beats_ix[0]),
-                'Correction': np.insert(correction_flags, 0, 0)}
-            )
-        else:
-            original = pd.DataFrame(
-                {'Original IBI (ms)': np.insert(original_ibis_ms, 0, np.nan),
-                'Original IBI (index)': np.insert(ibis.astype(object), 0, np.nan),
-                'Original Beat': np.insert(beats, 0, beats_ix[0]),
-                'Correction': np.insert(correction_flags, 0, 0)}
-            )
+        original = pd.DataFrame(
+            {'Original IBI (ms)': np.insert(original_ibis_ms, 0, np.nan),
+            'Original IBI (index)': np.insert(ibis.astype(object), 0, np.nan),
+            'Original Beat': np.insert(beats, 0, beats_ix[0]),
+            'Correction': np.insert(correction_flags, 0, 0)}
+        )
         
         corrected_ibis_ms = np.round((np.array(corrected_ibis) / self.fs) * 1000, 2)
 
         corrected_ibis = np.array(corrected_ibis).astype(object)
         corrected_flags = np.array(corrected_flags).astype(object)
 
-        if ibi_data is not None:
-            timestamp = ibi_data['Timestamp'].iloc[0]
-            timestamps = []
-            for ibi in corrected_ibis_ms:
-                timestamps.append(timestamp)
-                timestamp += pd.Timedelta(milliseconds = ibi)
-            timestamps.append(timestamp)
-            corrected = pd.DataFrame(
-                {'Timestamp': timestamps,
-                'Corrected IBI (ms)': np.insert(corrected_ibis_ms, 0, np.nan),
-                'Corrected IBI (index)': np.insert(corrected_ibis, 0, np.nan), 
-                'Corrected Beat': np.insert(corrected_beats, 0, beats_ix[0]),
-                'Flag': np.insert(corrected_flags, 0, np.nan)}
-            )
-        else:
-            # Add the first beat and create a dataframe
-            corrected = pd.DataFrame(
-                {'Corrected IBI (ms)': np.insert(corrected_ibis_ms, 0, np.nan),
-                'Corrected IBI (index)': np.insert(corrected_ibis, 0, np.nan), 
-                'Corrected Beat': np.insert(corrected_beats, 0, beats_ix[0]),
-                'Flag': np.insert(corrected_flags, 0, np.nan)}
-            )
+        # Add the first beat and create a dataframe
+        corrected = pd.DataFrame(
+            {'Corrected IBI (ms)': np.insert(corrected_ibis_ms, 0, np.nan),
+            'Corrected IBI (index)': np.insert(corrected_ibis, 0, np.nan), 
+            'Corrected Beat': np.insert(corrected_beats, 0, beats_ix[0]),
+            'Flag': np.insert(corrected_flags, 0, np.nan)}
+        )
 
         # print('Number of inserted intervals: ', n_insert)
 
-        if adaptive_threshold:
-            thresholds_all = pd.DataFrame({
-                'Short threshold': short_thresholds,
-                'Long threshold': long_thresholds,
-                'Extra threshold': extra_thresholds
-            })
-            if ignore_motion_seg:
-                original['Uncorrectable'] = np.insert(uncorrectable, 0, np.nan)
-            
-            if ignore_motion_seg:
-                return original, corrected, thresholds_all, segments_df
-            else:
-                return original, corrected, thresholds_all, None
-        else:
-            if ignore_motion_seg:
-                return original, corrected, None, segments_df
-            else:
-                return original, corrected, None, None
+        return original, corrected
     
     def get_corrected(self, beats_ix, seg_size = 60, initial_hr = 'auto', prev_n = 6, min_bpm = 40, max_bpm = 200, hr_estimate_window = 6, print_estimated_hr = True,
-                        short_threshold = (24 / 32),  long_threshold = (44 / 32), extra_threshold = (52 / 32), adaptive_threshold = False, ibi_data = None, 
-                        window_num = 7, mims = None, mims_threshold = 0.2, ignore_motion_seg = False, motion_per_threshold = 0.5):
+                        short_threshold = (24 / 32),  long_threshold = (44 / 32), extra_threshold = (52 / 32)):
         """
         Get the corrected interbeat intervals (IBIs) and beat indices.
 
@@ -1631,22 +1250,15 @@ class Cardio:
             # of Accepted/short/long/extra long flags
         """
         # Get the corrected IBIs and beat indices
-        original, corrected, thresholds, segments_df = self.correct_interval(beats_ix=beats_ix, seg_size = seg_size, initial_hr=initial_hr, prev_n=prev_n, min_bpm=min_bpm, max_bpm=max_bpm, hr_estimate_window=hr_estimate_window, print_estimated_hr = print_estimated_hr,
-                                                short_threshold=short_threshold, long_threshold= long_threshold, extra_threshold=extra_threshold, adaptive_threshold = adaptive_threshold, ibi_data = ibi_data, 
-                                                mims = mims, mims_threshold = mims_threshold, ignore_motion_seg = ignore_motion_seg, motion_per_threshold = motion_per_threshold, window_num = window_num)
+        original, corrected = self.correct_interval(beats_ix=beats_ix, seg_size = seg_size, initial_hr=initial_hr, prev_n=prev_n, min_bpm=min_bpm, max_bpm=max_bpm, hr_estimate_window=hr_estimate_window, print_estimated_hr = print_estimated_hr,
+                                                short_threshold=short_threshold, long_threshold= long_threshold, extra_threshold=extra_threshold)
 
         # Get the segment number for each beat
         for row in original.iterrows():
-            if ibi_data is not None:
-                seg = ceil(row[1][3] / (seg_size * self.fs))
-            else:
-                seg = ceil(row[1][2] / (seg_size * self.fs))
+            seg = ceil(row[1].loc['Original Beat'] / (seg_size * self.fs))
             original.loc[row[0], 'Segment'] = seg
         for row in corrected.iterrows():
-            if ibi_data is not None:
-                seg = ceil(row[1][3] / (seg_size * self.fs))
-            else:
-                seg = ceil(row[1][2] / (seg_size * self.fs))
+            seg = ceil(row[1].loc['Corrected Beat'] / (seg_size * self.fs))
             corrected.loc[row[0], 'Segment'] = seg
         original['Segment'] = original['Segment'].astype(pd.Int64Dtype())
         corrected['Segment'] = corrected['Segment'].astype(pd.Int64Dtype())
@@ -1668,10 +1280,9 @@ class Cardio:
         corrected_seg = corrected_seg.rename_axis(None, axis = 1)
     
         combined = pd.merge(corrected_seg, original_seg, on='Segment')
-        if ignore_motion_seg:
-            combined = pd.merge(combined, segments_df[['Segment', 'Motion Percentage (%)', 'Correctable']], on = 'Segment')
 
-        return original, corrected, thresholds, combined
+        return original, corrected, combined
+
 
     def get_missing(self, data, beats_ix, seg_size = 60, min_hr = 40,
                     ts_col = None, show_progress = True):
